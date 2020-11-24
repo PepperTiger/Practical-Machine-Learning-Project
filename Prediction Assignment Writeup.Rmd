@@ -1,0 +1,140 @@
+---
+title: "Prediction Assignment Writeup"
+author: "Paul Beuran"
+date: "23/11/2020"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Summary
+
+This assignment has for goal to create models predicting the quality of physical exercises, measured through different accelerometers placed on the body. Models are trained using the `pml-training.csv` data set and tested on the `pml-testing.csv` data set.
+
+In summary, this study shows that:
+
+- Among 4 models (decision tree, random forest, boosting, linear discriminant analysis), the random forest and  models seems to be the most accurate one.
+- Processing the data by using the Box-Cox transformation and reducing the data dimensionality through principal component analysis do not seem to yield better results for model training and prediction, but reduce model complexity.
+
+# Preparation phase
+
+```{r libraries}
+library(dplyr)
+library(caret)
+```
+
+```{r getData}
+training = read.csv("pml-training.csv")
+testing = read.csv("pml-testing.csv")
+```
+
+```{r explore data}
+dim(training)
+```
+
+# Processing phase
+
+```{r prepare data}
+
+#Remove columns full of NA in testing and remove those same columns in training
+not_all_na = function(x) any(!is.na(x))
+testing = testing %>% select_if(not_all_na)
+testing = testing[,-ncol(testing)]
+training = training[,c(colnames(testing), "classe")]
+
+#Transform as factor the categorical columns
+training$new_window = as.factor(training$new_window)
+training$classe = as.factor(training$classe)
+testing$new_window = as.factor(testing$new_window)
+
+#Remove columns that could interfere with the classification process
+col_to_remove = c("X", "user_name", "cvtd_timestamp")
+training = training[,!(colnames(training) %in% col_to_remove)]
+testing = testing[,!(colnames(testing) %in% col_to_remove)]
+```
+
+We first prepare the data before processing it. Hence: 
+
+- We delete all the empty columns in both training and testing data sets, as they do not bring any useful information for our models.
+- We make the necessary transformation for the categorical data columns.
+- We delete the columns considered detrimental for model training (id, user-name, time stamps).
+- We concord both training and testing data set so they have the same columns (except the training one, which needs the additional `classe` columns used for classifications)
+
+```{r process data}
+col_to_ignore_BoxCox = c("new_window", "classe")
+
+# PCA/Box-Cox transformation
+training_2 = training[,!(colnames(training) %in% col_to_ignore_BoxCox)]
+preObj = preProcess(training_2, method = c("BoxCox", "pca"), thresh=0.9)
+training_2 = predict(preObj, training_2)
+
+testing_2 = testing[,!(colnames(testing) %in% col_to_ignore_BoxCox)]
+testing_2 = predict(preObj, testing_2)
+
+testing_2[,"new_window"] = testing[,"new_window"]
+training_2[,c("new_window", "classe")] = training[,c("new_window", "classe")]
+
+training_2$classe = training$classe
+```
+
+We then process the data by :
+
+- Using the Box-Cox transformation to force our numerical data to be almost normally distributed
+- Using the PCA to reduce the data dimensionality by creating new dimensions composed of linear combinations of those old dimensions, each new dimension trying to explain the most variation in the remaining data.
+
+Processing the data in this way not only assure that the learning process will be easier with less dimensions, but also to avoid overfitting with values having too much or too little differences in the data set, and to gather covariates together.
+
+# Training and prediction phase
+
+We will build 4 models (decision tree, random forest, boosting, linear discriminant analysis) on the raw data and processed data, and pick the best model for prediction. To assert with assurance the accuracy of a model, we will resample the training data through bootstrapping.
+
+```{r training & prediction - raw data, cache=TRUE}
+model_rpart = train(classe~., data = training, method = "rpart")
+pred_rpart = predict(model_rpart, testing)
+model_rpart
+
+model_rf = train(classe~., data = training, method = "rf")
+pred_rf = predict(model_rf, testing)
+model_rf
+
+model_gbm = train(classe~., data = training, method = "gbm", verbose = FALSE)
+pred_gbm = predict(model_gbm, testing)
+model_gbm
+
+model_lda = train(classe~., data = training, method = "lda")
+pred_lda = predict(model_lda, testing)
+model_lda
+```
+
+```{r training & prediction - processed data, cache=TRUE}
+model_rpart_2 = train(classe~., data = training_2, method = "rpart")
+pred_rpart_2 = predict(model_rpart_2, testing_2)
+model_rpart_2
+
+model_rf_2 = train(classe~., data = training_2, method = "rf")
+pred_rf_2 = predict(model_rf_2, testing_2)
+model_rf_2
+
+model_gbm_2 = train(classe~., data = training_2, method = "gbm", verbose = FALSE)
+pred_gbm_2 = predict(model_gbm_2, testing_2)
+model_gbm_2
+
+model_lda_2 = train(classe~., data = training_2, method = "lda")
+pred_lda_2 = predict(model_lda_2, testing_2)
+model_lda_2
+```
+
+We can see that:
+
+- The random forest and boosting models are the most accurate ones, for either the raw (99% and 99% accuracy) or the processed data (99% and 80% accuracy). Decision tree and LDA are performing more poorly than the latter (less than 80% for either raw and processed data).
+- Models on processed data seems to perform in a more poorly way than raw data. However, as the training on raw data could maybe lead to overfitting, due to the fact that the more complex a data set is, the less error will be done on the training set, and on the test set until a certain threshold where the trend get reversed, and the accuracy tests are realized on the training set, those results should not be taken for granted.
+
+Therefore , we will use the random forest model on the processed data to predict on the test set, which yield those results:
+
+```{r results}
+pred_rf_2
+```
